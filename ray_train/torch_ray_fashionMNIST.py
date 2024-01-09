@@ -15,7 +15,7 @@ import tempfile
 
 # define run configuration ifno
 run_config = RunConfig(
-    storage_path = os.path.abspath("ray_results"),
+    storage_path = os.path.abspath("run_results"),
     name="train_ddp_fmnist_linear"
 )
 
@@ -173,15 +173,29 @@ def train_fashion_mnist(num_workers=2, use_gpu=False):
 def load_model_from_checkpoint(trial_path):
     # path to results from run config defined above with specified trial
     path = os.path.join(run_config.storage_path, run_config.name, trial_path)
-    restored_result = Result.from_path(path)
-    state_dict = torch.load(restored_result.checkpoint.value)
-    print(type(state_dict))
-    # print(f"Restored result: {restored_result}")
+    res = Result.from_path(path)
+    state_dict = torch.load(os.path.join(res.checkpoint.path, "checkpoint.bin"))
+    model = NeuralNetwork()
+    model.load_state_dict(state_dict['state_dict'])
+    print(f"Successfully loaded model from {path}")
+    return model
 
+
+def load_and_predict(trial_path, test_dataloader):
+    model = load_model_from_checkpoint(trial_path)
+    loss_fn = nn.CrossEntropyLoss()
+    test_loss, acc = test_epoch(model, loss_fn, test_dataloader)
+    print(f"Test loss: {test_loss}, accuracy: {acc}")
 
 
 if __name__ == '__main__':
-    # train_fashion_mnist(num_workers=4, use_gpu=False)
-    trial_path = "TorchTrainer_6f9f5_00000_0_2024-01-08_11-53-23"
-    load_model_from_checkpoint(trial_path)
+    ## train model with DDP
+    # train_fashion_mnist(num_workers=2, use_gpu=True)
+
+    # load model from checkpoint and run inference
+    _, test_dataloader = get_dataloaders(256)
+    # test_dataloader = train.torch.prepare_data_loader(test_dataloader)
+    trial_path = "TorchTrainer_1553e_00000_0_2024-01-08_14-56-59"
+    load_and_predict(trial_path, test_dataloader)
+    
     
