@@ -9,6 +9,7 @@ from filelock import FileLock
 from torch.utils.data import DataLoader, Subset
 from torchvision.datasets import CIFAR10
 from torchvision.models import resnet18
+from tqdm import tqdm
 
 import ray
 import ray.cloudpickle as cpickle
@@ -23,7 +24,8 @@ from ray.tune.tuner import Tuner
 def train_epoch(dataloader, model, loss_fn, optimizer):
     size = len(dataloader.dataset) // train.get_context().get_world_size()
     model.train()  # training mode for layers like dropout, etc.
-    for batch, (X, y) in enumerate(dataloader):
+    # for batch, (X, y) in enumerate(dataloader):
+    for X, y in tqdm(dataloader, desc="Train epoch"):
         # prediction and loss
         pred = model(X)
         loss = loss_fn(pred, y)
@@ -33,9 +35,9 @@ def train_epoch(dataloader, model, loss_fn, optimizer):
         loss.backward()
         optimizer.step()
 
-        if batch % 100 == 0:
-            loss, current = loss.item(), batch * len(X)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+        # if batch % 100 == 0:
+        #     loss, current = loss.item(), batch * len(X)
+        #     print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
 def validate_epoch(dataloader, model, loss_fn):
@@ -85,8 +87,7 @@ def train_func(config):
     starting_epoch = 0
     if train.get_checkpoint():
         with train.get_checkpoint().as_directory() as ckpt_dir:
-            with open(os.path.join(ckpt_dir, 'data.ckpt'), 'rb') as fp:
-                ckpt_dict = cpickle.load(fp)
+            ckpt_dict = torch.load(os.path.join(ckpt_dir, 'ckpt.pt'))
         
         # load model
         model_state = ckpt_dict['model']
@@ -139,38 +140,35 @@ def train_func(config):
     # create loss
     criterion = nn.CrossEntropyLoss()
 
-    for epoch in range(starting_epoch, epoch): # generalized for ckpt
+    for epoch in range(starting_epoch, epochs): # generalized for ckpt
         train_epoch(train_loader, model, criterion, optimizer)
         result = validate_epoch(val_loader, model, criterion)
 
-        with tempfile.TemporaryDirectory() as ckpt_dir:
-            with open(os.path.join(ckpt_dir, 'data.ckpt'), 'wb') as fp:
-                cpickle.dump(
-                    {
-                        'model': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'epoch': epoch,
-                    },
-                    fp,
-                )
-            checkpoint = Checkpoint.from_directory(ckpt_dir)
-            train.report(result, checkpoint=checkpoint)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            torch.save(
+                {
+                    'model': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'epoch': epoch,
+                },
+                os.path.join(tmp_dir, 'ckpt.pt'),
+            )
+            train.report(result, checkpoint=Checkpoint.from_directory(tmp_dir))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--num-workers', '-n', type=int, default=2,
+    parser.add_argument('--num_workers', '-n', type=int, default=2,
                        help='Number of workers to use for training.')
     parser.add_argument('--num_epochs', type=int, default=5,
                         help='Number of epochs to train for.')
-    parser.add_argument('--smoke-test', action='store_true',
+    parser.add_argument('--smoke_test', action='store_true',
                         help='Finish quickly for testing.')
-    parser.add_argument('--use-gpu', action='store_true',
+    parser.add_argument('--use_gpu', action='store_true',
                         help='Use GPU for training.')
     parser.add_argument('--data-dir', type=str, default='~/data',
                         required=False, help='Directory for downloading data.')
     parser.add_argument('--synch', action='store_true',
                         help='Use synchronous PBT.')
-
     args, _ = parser.parse_known_args()
     
     trainer = TorchTrainer(
