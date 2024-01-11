@@ -10,9 +10,9 @@ from torch.utils.data import DataLoader, Subset
 from torchvision.datasets import CIFAR10
 from torchvision.models import resnet18
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 import ray
-import ray.cloudpickle as cpickle
 from ray import train, tune
 from ray.train import Checkpoint, FailureConfig, RunConfig, ScalingConfig
 from ray.train.torch import TorchTrainer
@@ -90,9 +90,9 @@ def train_func(config):
             ckpt_dict = torch.load(os.path.join(ckpt_dir, 'ckpt.pt'))
         
         # load model
+        model = train.torch.prepare_model(model)
         model_state = ckpt_dict['model']
         model.load_state_dict(model_state)
-        model = train.torch.prepare_model(model)
 
         # load optimizer
         optimizer_state = ckpt_dict['optimizer_state_dict']
@@ -137,6 +137,10 @@ def train_func(config):
     train_loader = DataLoader(train_dataset, batch_size=worker_batch_size)
     val_loader = DataLoader(val_dataset, batch_size=worker_batch_size)
 
+    # make sure data is on correct device
+    train_loader = train.torch.prepare_data_loader(train_loader)
+    val_loader = train.torch.prepare_data_loader(val_loader)
+
     # create loss
     criterion = nn.CrossEntropyLoss()
 
@@ -180,13 +184,14 @@ if __name__ == '__main__':
     )
     pbt_scheduler = PopulationBasedTraining(
         time_attr='training_iteration',
-        perturbation_interval=1,
+        perturbation_interval=args.num_epochs//10,
+        burn_in_period=2*(args.num_epochs//10),
         hyperparam_mutations={
             'train_loop_config':{
                 # distribution for resampling
                 'lr': tune.loguniform(1e-3, 1e-1),
                 # allow perturbations within this set of categorical values
-                'momentum': [0.8, 0.9, 0.99],
+                'momentum': [0.5, 0.8, 0.9, 0.99],
             }
         },
         synch=args.synch,
@@ -196,21 +201,22 @@ if __name__ == '__main__':
         trainer,
         param_space={
             'train_loop_config': {
-                'lr': tune.grid_search([1e-3, 1e-2, 5e-2, 1e-1]),
+                'lr': tune.grid_search([1e-5, 1e-4, 1e-3, 1e-2, 5e-2, 1e-1]),
                 'momentum': 0.8,
-                'batch_size': 128 * args.num_workers,
+                'batch_size': 512 * args.num_workers,
                 'test_mode': args.smoke_test,  # whether to subset data
                 'data_dir': args.data_dir,
                 'epochs': args.num_epochs,
             }
         },
         tune_config=TuneConfig(
-            num_samples=1,
+            num_samples=4,
             metric='loss',
             mode='min',
             scheduler=pbt_scheduler,
         ),
         run_config=RunConfig(
+            storage_path=(os.path.expanduser('~') + '/workspace/'),
             stop={'training_iteration': 3 if args.smoke_test else args.num_epochs},
             failure_config=FailureConfig(max_failures=3),  # fault tolerance
         ),
@@ -218,4 +224,22 @@ if __name__ == '__main__':
 
     results = tuner.fit()
 
-    print(results.get_best_result(metric='loss', mode='min'))
+    best_result = results.get_best_result(metric='loss', mode='min')
+    print(f"Results: {best_result}")
+
+    # Print `path` where checkpoints are stored
+    print('Best result path:', best_result.path)
+
+    # Print the best trial `config` reported at the last iteration
+    # NOTE: This config is just what the trial ended up with at the last iteration.
+    # See the next section for replaying the entire history of configs.
+    print("Best final iteration hyperparameter config:\n", best_result.config)
+
+    # Plot the learning curve for the best trial
+    df = best_result.metrics_dataframe
+    # Deduplicate, since PBT might introduce duplicate data
+    df = df.drop_duplicates(subset="training_iteration", keep="last")
+    df.plot("training_iteration", "loss")
+    plt.xlabel("Training Iterations")
+    plt.ylabel("Validation Loss")
+    plt.show()

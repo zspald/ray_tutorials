@@ -86,7 +86,7 @@ def train_cifar(config):
             model_state, optimizer_state = torch.load(
                 os.path.join(ckpt_dir, "checkpoint.pt")
             )
-            net.load_state_dict
+            net.load_state_dict(model_state)
             optimizer.load_state_dict(optimizer_state)
 
     if config['smoke_test']:
