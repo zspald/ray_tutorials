@@ -14,7 +14,8 @@ import matplotlib.pyplot as plt
 
 import ray
 from ray import train, tune
-from ray.train import Checkpoint, FailureConfig, RunConfig, ScalingConfig
+from ray.train import (Checkpoint, FailureConfig, RunConfig, ScalingConfig,
+                       CheckpointConfig)
 from ray.train.torch import TorchTrainer
 from ray.tune.schedulers import PopulationBasedTraining
 from ray.tune.tune_config import TuneConfig
@@ -121,7 +122,8 @@ def train_func(config):
                              (0.2023, 0.1994, 0.2010)),
     ])  # mean/std transformation for CIFAR10
 
-    data_dir = config.get('data_dir', os.path.expanduser('~/data'))
+    data_dir = config.get('data_dir', '~/workspace/data')
+    data_dir = os.path.expanduser(data_dir)
     os.makedirs(data_dir, exist_ok=True)
     with FileLock(os.path.join(data_dir, '.ray.lock')):
         train_dataset = CIFAR10(data_dir, train=True, download=True,
@@ -169,7 +171,7 @@ if __name__ == '__main__':
                         help='Finish quickly for testing.')
     parser.add_argument('--use_gpu', action='store_true',
                         help='Use GPU for training.')
-    parser.add_argument('--data-dir', type=str, default='~/data',
+    parser.add_argument('--data_dir', type=str, default='~/workspace/data',
                         required=False, help='Directory for downloading data.')
     parser.add_argument('--synch', action='store_true',
                         help='Use synchronous PBT.')
@@ -185,7 +187,7 @@ if __name__ == '__main__':
     pbt_scheduler = PopulationBasedTraining(
         time_attr='training_iteration',
         perturbation_interval=args.num_epochs//10,
-        burn_in_period=2*(args.num_epochs//10),
+        burn_in_period=(2*args.num_epochs)//10,
         hyperparam_mutations={
             'train_loop_config':{
                 # distribution for resampling
@@ -202,6 +204,7 @@ if __name__ == '__main__':
         param_space={
             'train_loop_config': {
                 'lr': tune.grid_search([1e-5, 1e-4, 1e-3, 1e-2, 5e-2, 1e-1]),
+                # 'lr': tune.grid_search([1e-4, 1e-3]),
                 'momentum': 0.8,
                 'batch_size': 512 * args.num_workers,
                 'test_mode': args.smoke_test,  # whether to subset data
@@ -210,17 +213,21 @@ if __name__ == '__main__':
             }
         },
         tune_config=TuneConfig(
-            num_samples=4,
+            num_samples=1,
             metric='loss',
             mode='min',
             scheduler=pbt_scheduler,
         ),
         run_config=RunConfig(
-            storage_path=(os.path.expanduser('~') + '/workspace/'),
+            storage_path=os.path.expanduser('~/workspace/ray_results'),
+            name='pbt_cifar10_tune',
             stop={'training_iteration': 3 if args.smoke_test else args.num_epochs},
             failure_config=FailureConfig(max_failures=3),  # fault tolerance
+            checkpoint_config=CheckpointConfig(num_to_keep=3),
         ),
     )
+
+    # print(args.data_dir)
 
     results = tuner.fit()
 

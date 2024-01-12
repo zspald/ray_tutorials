@@ -5,10 +5,8 @@
 #SBATCH -e out/ray_pbt_clust/slurm_%j.err
 #SBATCH -p gpu-common,scavenger-gpu
 
-#SBATCH --exclude=dcc-youlab-gpu
-
 ### This script works for any number of nodes, Ray will find and manage all resources
-#SBATCH --nodes=4
+#SBATCH --nodes=12
 
 ### Give all resources on each node to a single Ray task, ray can manage the resources internally
 #SBATCH --ntasks-per-node=1
@@ -74,4 +72,4 @@ done
 
 ### Run your program ###
 # n=1 means 1 gpu per model training. all resources are allocated to a single pbt task
-python -u tune_pbt_cifar.py -n 1 --num_epochs 50 --use_gpu --synch
+python -u tune_pbt_cifar.py -n 2 --num_epochs 25 --use_gpu --synch
